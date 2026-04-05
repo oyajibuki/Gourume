@@ -97,21 +97,64 @@ function doPost(e) {
 
       Logger.log('OCR結果: ' + JSON.stringify(ocrInfo));
 
-      // Step 2なし: OCR結果をそのままshopInfoに変換
-      const shopInfo = {
-        name: ocrInfo.name,
-        prefecture: '',
-        area: ocrInfo.location || '',
-        genre: '',
-        address: '',
-        phone: '',
-        budget: '',
-        hours: '',
-        situations: [],
-        reservable: '',
-        webUrl: '',
-        imageUrl: ''
-      };
+      // ── Step 2: compound-beta Web検索 → 全カラム補完 ──
+      const searchQuery = ocrInfo.name + (ocrInfo.location ? ' ' + ocrInfo.location : '');
+      const searchRes = UrlFetchApp.fetch(groqUrl, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'Authorization': 'Bearer ' + apiKey },
+        payload: JSON.stringify({
+          model: 'compound-beta',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a Japanese restaurant data extractor. Search the web and return ONLY raw JSON. No markdown, no explanation, no code block.'
+            },
+            {
+              role: 'user',
+              content: `食べログ・ぐるなび・ホットペッパーなどで「${searchQuery}」を検索して、以下のJSONを埋めてください。
+
+【重要ルール】
+- prefectureは都道府県だけ（例: "東京都" "神奈川県" "大阪府"）。市区町村を含めない。
+- areaは市区町村だけ（例: "渋谷区" "横浜市中区" "新宿区"）。都道府県を含めない。
+- genreは必ず日本語で（例: "ラーメン" "焼肉" "中華料理" "イタリアン" "居酒屋"）
+- reservableは〇か△か×のどれか1文字のみ
+- JSONのみ返す。説明文・コードブロック不要。
+
+{"prefecture":"神奈川県","area":"横浜市中区","name":"店名","genre":"ジャンル","address":"番地まで","phone":"045-xxx-xxxx","budget":"¥2,000〜¥3,000","hours":"11:00〜22:00、月曜定休","situations":["デート","友人"],"reservable":"〇","webUrl":"https://...","imageUrl":""}`
+            }
+          ],
+          temperature: 0.1,
+          max_tokens: 1024
+        }),
+        muteHttpExceptions: true
+      });
+
+      if (searchRes.getResponseCode() === 429) {
+        return createJsonResponse({ status: 'error', isRateLimit: true, message: 'APIレート制限に達しました。1分ほど待ってから再度お試しください。' });
+      }
+
+      let shopInfo;
+      if (searchRes.getResponseCode() !== 200) {
+        shopInfo = { name: ocrInfo.name, prefecture: '', area: ocrInfo.location || '', genre: '', address: '', phone: '', budget: '', hours: '', situations: [], reservable: '', webUrl: '', imageUrl: '' };
+      } else {
+        const searchJson = JSON.parse(searchRes.getContentText());
+        let rawText = searchJson.choices[0].message.content.trim()
+          .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) rawText = jsonMatch[0];
+        try {
+          shopInfo = JSON.parse(rawText);
+        } catch(e) {
+          shopInfo = { name: ocrInfo.name, prefecture: '', area: ocrInfo.location || '', genre: '', address: '', phone: '', budget: '', hours: '', situations: [], reservable: '', webUrl: '', imageUrl: '' };
+        }
+      }
+
+      if (!shopInfo.name) shopInfo.name = ocrInfo.name;
+      shopInfo.imageUrl = '';
+
+      // ── GAS側後処理: prefecture/areaが混在していたら強制分割 ──
+      shopInfo = splitPrefectureArea(shopInfo);
 
       // ── 重複チェック: 同じuserId + 同じ店名が既にあるか ──
       const allRows = sheet.getDataRange().getValues();
@@ -306,6 +349,47 @@ function doGet(e) {
 function createJsonResponse(responseObject) {
   return ContentService.createTextOutput(JSON.stringify(responseObject))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ============================================================
+// prefecture/area混在を強制分割するポスト処理
+// 例: prefecture="神奈川県横浜市中区" → prefecture="神奈川県" area="横浜市中区"
+// ============================================================
+function splitPrefectureArea(shopInfo) {
+  const PREFECTURES = [
+    '北海道','青森県','岩手県','宮城県','秋田県','山形県','福島県',
+    '茨城県','栃木県','群馬県','埼玉県','千葉県','東京都','神奈川県',
+    '新潟県','富山県','石川県','福井県','山梨県','長野県','岐阜県',
+    '静岡県','愛知県','三重県','滋賀県','京都府','大阪府','兵庫県',
+    '奈良県','和歌山県','鳥取県','島根県','岡山県','広島県','山口県',
+    '徳島県','香川県','愛媛県','高知県','福岡県','佐賀県','長崎県',
+    '熊本県','大分県','宮崎県','鹿児島県','沖縄県'
+  ];
+
+  let pref = shopInfo.prefecture || '';
+  let area = shopInfo.area || '';
+
+  // prefectureに都道府県+市区町村が混在している場合
+  for (const p of PREFECTURES) {
+    if (pref.startsWith(p) && pref.length > p.length) {
+      area = pref.slice(p.length); // 都道府県より後ろをareaに
+      pref = p;
+      break;
+    }
+  }
+
+  // areaに都道府県が含まれている場合も除去
+  for (const p of PREFECTURES) {
+    if (area.startsWith(p)) {
+      if (!pref) pref = p;
+      area = area.slice(p.length);
+      break;
+    }
+  }
+
+  shopInfo.prefecture = pref;
+  shopInfo.area = area;
+  return shopInfo;
 }
 
 // ============================================================
