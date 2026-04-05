@@ -46,83 +46,115 @@ function doPost(e) {
       return createJsonResponse({ status: 'error', message: 'shop not found' });
     }
 
-    // ── 2. 画像をGroq(Llama Vision)で解析して新規登録 ──
+    // ── 2. 画像解析して新規登録（OCR → Web検索 → 情報補完） ──
     if (data.action === 'analyze') {
       const apiKey = PropertiesService.getScriptProperties().getProperty('GROQ_API_KEY');
       if (!apiKey) {
-        return createJsonResponse({ status: 'error', message: 'GROQ_API_KEY が未設定です。GASのスクリプトプロパティに追加してください。' });
+        return createJsonResponse({ status: 'error', message: 'GROQ_API_KEY が未設定です。' });
       }
 
       const groqUrl = 'https://api.groq.com/openai/v1/chat/completions';
 
-      const prompt = `この画像はSNS（Instagram、X、食べログ、Rettyなど）の飲食店投稿スクリーンショットです。
-画像から読み取れる情報をすべて抽出し、以下のJSON形式のみで返してください。
-読み取れない項目は空文字にしてください。コードブロック・説明文は一切不要です。
-{
-  "prefecture": "都道府県（例: 東京都）",
-  "area": "エリア・区・市（例: 渋谷区）",
-  "name": "店名",
-  "genre": "ジャンル（例: イタリアン・焼肉・ラーメン）",
-  "address": "住所（番地まで）",
-  "phone": "電話番号",
-  "budget": "予算（例: ¥3,000〜¥5,000）",
-  "hours": "営業時間（例: 11:00〜23:00、月曜定休）",
-  "situations": ["シーン（例: デート, 女子会, 接待）"],
-  "reservable": "予約可否（〇 △ ×）",
-  "webUrl": "公式サイトURL",
-  "imageUrl": ""
-}`;
-
-      const groqPayload = {
+      // ── Step 1: OCR（Llama Vision）→ 店名・エリアだけ抽出 ──
+      const ocrPayload = {
         model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         messages: [{
           role: 'user',
           content: [
-            { type: 'text', text: prompt },
+            {
+              type: 'text',
+              text: `この画像から飲食店の名前と場所を読み取ってください。
+JSONのみで返してください（説明不要）：
+{"name": "店名", "location": "都道府県や駅名などの手がかり"}`
+            },
             { type: 'image_url', image_url: { url: `data:${data.mimeType || 'image/jpeg'};base64,${data.imageBase64}` } }
           ]
         }],
         temperature: 0.1,
-        max_tokens: 1024
+        max_tokens: 256
       };
 
-      const groqRes = UrlFetchApp.fetch(groqUrl, {
+      const ocrRes = UrlFetchApp.fetch(groqUrl, {
         method: 'post',
         contentType: 'application/json',
         headers: { 'Authorization': 'Bearer ' + apiKey },
-        payload: JSON.stringify(groqPayload),
+        payload: JSON.stringify(ocrPayload),
         muteHttpExceptions: true
       });
 
-      const statusCode = groqRes.getResponseCode();
-
-      // レート制限（429）の専用エラー
-      if (statusCode === 429) {
-        return createJsonResponse({
-          status: 'error',
-          isRateLimit: true,
-          message: 'APIレート制限に達しました。1分ほど待ってから再度お試しください。'
-        });
+      if (ocrRes.getResponseCode() === 429) {
+        return createJsonResponse({ status: 'error', isRateLimit: true, message: 'APIレート制限に達しました。1分ほど待ってから再度お試しください。' });
+      }
+      if (ocrRes.getResponseCode() !== 200) {
+        return createJsonResponse({ status: 'error', message: `OCRエラー (HTTP ${ocrRes.getResponseCode()}): ` + ocrRes.getContentText() });
       }
 
-      if (statusCode !== 200) {
-        return createJsonResponse({
-          status: 'error',
-          message: `Groq APIエラー (HTTP ${statusCode}): ` + groqRes.getContentText()
-        });
+      const ocrJson = JSON.parse(ocrRes.getContentText());
+      let ocrText = ocrJson.choices[0].message.content.trim()
+        .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+      const ocrMatch = ocrText.match(/\{[\s\S]*\}/);
+      if (ocrMatch) ocrText = ocrMatch[0];
+
+      let ocrInfo = { name: '', location: '' };
+      try { ocrInfo = JSON.parse(ocrText); } catch(e) {}
+
+      Logger.log('OCR結果: ' + JSON.stringify(ocrInfo));
+
+      if (!ocrInfo.name) {
+        return createJsonResponse({ status: 'error', message: '画像から店名を読み取れませんでした。別の画像をお試しください。' });
       }
 
-      const groqJson = JSON.parse(groqRes.getContentText());
+      // ── Step 2: Web検索（compound-beta）→ 全カラム補完 ──
+      const searchQuery = ocrInfo.name + (ocrInfo.location ? ' ' + ocrInfo.location : '') + ' 飲食店';
+      const searchPayload = {
+        model: 'compound-beta',
+        messages: [
+          {
+            role: 'system',
+            content: 'あなたは飲食店情報を調べるアシスタントです。必ずWeb検索して正確な情報を取得し、JSONのみで返してください。'
+          },
+          {
+            role: 'user',
+            content: `「${searchQuery}」をWeb検索して、以下のJSON形式で情報を返してください。
+コードブロック・説明文は一切不要です。JSONのみ返してください。
+{
+  "prefecture": "都道府県（例: 東京都）",
+  "area": "エリア・区・市（例: 渋谷区）",
+  "name": "正式な店名",
+  "genre": "ジャンル（例: 中華料理・ラーメン・焼肉）",
+  "address": "住所（番地まで）",
+  "phone": "電話番号",
+  "budget": "予算（例: ¥1,000〜¥2,000）",
+  "hours": "営業時間と定休日",
+  "situations": ["おすすめシーン（デート/女子会/接待/家族など）"],
+  "reservable": "予約可否（〇 △ ×）",
+  "webUrl": "公式サイトURL（食べログ・ぐるなび除く）",
+  "imageUrl": ""
+}`
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 1024
+      };
 
-      if (!groqJson.choices || groqJson.choices.length === 0) {
-        return createJsonResponse({ status: 'error', message: 'Groq APIからの応答が空です: ' + JSON.stringify(groqJson) });
+      const searchRes = UrlFetchApp.fetch(groqUrl, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'Authorization': 'Bearer ' + apiKey },
+        payload: JSON.stringify(searchPayload),
+        muteHttpExceptions: true
+      });
+
+      if (searchRes.getResponseCode() === 429) {
+        return createJsonResponse({ status: 'error', isRateLimit: true, message: 'APIレート制限に達しました。1分ほど待ってから再度お試しください。' });
+      }
+      if (searchRes.getResponseCode() !== 200) {
+        return createJsonResponse({ status: 'error', message: `Web検索エラー (HTTP ${searchRes.getResponseCode()}): ` + searchRes.getContentText() });
       }
 
-      // JSONテキストを抽出（コードブロックを除去）
-      let rawText = groqJson.choices[0].message.content.trim();
-      rawText = rawText.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
-
-      // JSONだけ取り出す（前後に余計なテキストがある場合に対応）
+      const searchJson = JSON.parse(searchRes.getContentText());
+      let rawText = searchJson.choices[0].message.content.trim()
+        .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
       if (jsonMatch) rawText = jsonMatch[0];
 
@@ -130,8 +162,15 @@ function doPost(e) {
       try {
         shopInfo = JSON.parse(rawText);
       } catch (parseErr) {
-        return createJsonResponse({ status: 'error', message: 'JSONパースエラー: ' + rawText });
+        // Web検索失敗時はOCR結果をそのまま使う
+        shopInfo = { name: ocrInfo.name, prefecture: '', area: ocrInfo.location || '', genre: '', address: '', phone: '', budget: '', hours: '', situations: [], reservable: '', webUrl: '', imageUrl: '' };
       }
+
+      // 店名が空の場合はOCR結果で補完
+      if (!shopInfo.name) shopInfo.name = ocrInfo.name;
+
+      // ── Step 3: Places API で写真取得 ──
+      shopInfo.imageUrl = fetchPlacesPhoto(shopInfo.name, shopInfo.address || shopInfo.area);
 
       // ── 重複チェック: 同じuserId + 同じ店名が既にあるか ──
       const allRows = sheet.getDataRange().getValues();
@@ -326,6 +365,46 @@ function doGet(e) {
 function createJsonResponse(responseObject) {
   return ContentService.createTextOutput(JSON.stringify(responseObject))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ============================================================
+// Google Places API (New) で店舗写真URLを取得
+// ============================================================
+function fetchPlacesPhoto(shopName, hint) {
+  try {
+    const placesApiKey = PropertiesService.getScriptProperties().getProperty('PLACES_API_KEY');
+    if (!placesApiKey) return '';
+
+    const query = [shopName, hint].filter(Boolean).join(' ');
+    if (!query.trim()) return '';
+
+    const searchRes = UrlFetchApp.fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        'X-Goog-Api-Key': placesApiKey,
+        'X-Goog-FieldMask': 'places.photos'
+      },
+      payload: JSON.stringify({ textQuery: query, languageCode: 'ja' }),
+      muteHttpExceptions: true
+    });
+
+    if (searchRes.getResponseCode() !== 200) return '';
+    const searchJson = JSON.parse(searchRes.getContentText());
+    const photos = searchJson.places?.[0]?.photos;
+    if (!photos || photos.length === 0) return '';
+
+    const photoRes = UrlFetchApp.fetch(
+      `https://places.googleapis.com/v1/${photos[0].name}/media?key=${placesApiKey}&maxWidthPx=400&skipHttpRedirect=true`,
+      { muteHttpExceptions: true }
+    );
+    if (photoRes.getResponseCode() !== 200) return '';
+    return JSON.parse(photoRes.getContentText()).photoUri || '';
+
+  } catch (err) {
+    Logger.log('Places API エラー: ' + err.toString());
+    return '';
+  }
 }
 
 // ============================================================

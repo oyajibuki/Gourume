@@ -440,9 +440,20 @@ export default function App() {
                                   </button>
                                 </td>
 
-                                {/* ── ジャンル絵文字アイコン ── */}
+                                {/* ── 写真 or ジャンル絵文字 ── */}
                                 <td className="py-2 px-3 text-center">
-                                  <div className="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center mx-auto text-2xl border border-orange-100">
+                                  {shop.imageUrl && shop.imageUrl !== '' && shop.imageUrl !== '-' ? (
+                                    <img
+                                      src={shop.imageUrl}
+                                      alt={shop.name}
+                                      className="w-12 h-12 object-cover rounded-xl border border-gray-200 mx-auto"
+                                      onError={e => { e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }}
+                                    />
+                                  ) : null}
+                                  <div
+                                    className="w-12 h-12 bg-orange-50 rounded-xl items-center justify-center mx-auto text-2xl border border-orange-100"
+                                    style={{ display: (shop.imageUrl && shop.imageUrl !== '' && shop.imageUrl !== '-') ? 'none' : 'flex' }}
+                                  >
                                     {GENRE_EMOJI(shop.genre)}
                                   </div>
                                 </td>
