@@ -19,6 +19,36 @@ const createDeviceId = () => {
   return id;
 };
 
+// ジャンル → 絵文字マッピング
+const GENRE_EMOJI = (genre) => {
+  if (!genre) return '🍽️';
+  const g = genre.toLowerCase();
+  if (g.includes('ラーメン') || g.includes('ramen')) return '🍜';
+  if (g.includes('寿司') || g.includes('鮨') || g.includes('sushi')) return '🍣';
+  if (g.includes('焼肉') || g.includes('肉') || g.includes('ステーキ')) return '🥩';
+  if (g.includes('焼き鳥') || g.includes('鳥') || g.includes('chicken')) return '🍗';
+  if (g.includes('天ぷら') || g.includes('とんかつ') || g.includes('揚げ')) return '🍤';
+  if (g.includes('イタリアン') || g.includes('パスタ') || g.includes('ピザ')) return '🍝';
+  if (g.includes('フレンチ') || g.includes('フランス')) return '🥂';
+  if (g.includes('中華') || g.includes('餃子') || g.includes('中国')) return '🥟';
+  if (g.includes('韓国') || g.includes('チゲ') || g.includes('サムギョプサル')) return '🇰🇷';
+  if (g.includes('カレー')) return '🍛';
+  if (g.includes('うどん') || g.includes('そば')) return '🍱';
+  if (g.includes('バーガー') || g.includes('ハンバーガー')) return '🍔';
+  if (g.includes('ピザ')) return '🍕';
+  if (g.includes('カフェ') || g.includes('コーヒー') || g.includes('cafe')) return '☕';
+  if (g.includes('スイーツ') || g.includes('ケーキ') || g.includes('デザート')) return '🍰';
+  if (g.includes('居酒屋') || g.includes('酒') || g.includes('バー')) return '🍺';
+  if (g.includes('海鮮') || g.includes('魚') || g.includes('seafood')) return '🐟';
+  if (g.includes('和食') || g.includes('日本料理')) return '🍱';
+  if (g.includes('鍋') || g.includes('しゃぶしゃぶ') || g.includes('すき焼き')) return '🫕';
+  if (g.includes('ハンバーグ') || g.includes('洋食')) return '🍳';
+  if (g.includes('タイ') || g.includes('アジア') || g.includes('エスニック')) return '🌶️';
+  if (g.includes('スペイン') || g.includes('メキシコ') || g.includes('タコス')) return '🌮';
+  if (g.includes('馬肉') || g.includes('ジビエ')) return '🐴';
+  return '🍽️';
+};
+
 // ==========================================
 // ポップアップメニュー（position:fixed で table の overflow を回避）
 // ==========================================
@@ -410,21 +440,10 @@ export default function App() {
                                   </button>
                                 </td>
 
-                                {/* ── 写真 ── */}
+                                {/* ── ジャンル絵文字アイコン ── */}
                                 <td className="py-2 px-3 text-center">
-                                  {shop.imageUrl && shop.imageUrl !== '' && shop.imageUrl !== '-' ? (
-                                    <img
-                                      src={shop.imageUrl}
-                                      alt={shop.name}
-                                      className="w-12 h-12 object-cover rounded-lg border border-gray-200 mx-auto"
-                                      onError={e => { e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }}
-                                    />
-                                  ) : null}
-                                  <div
-                                    className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mx-auto text-gray-300"
-                                    style={{ display: (shop.imageUrl && shop.imageUrl !== '' && shop.imageUrl !== '-') ? 'none' : 'flex' }}
-                                  >
-                                    <Camera size={20} />
+                                  <div className="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center mx-auto text-2xl border border-orange-100">
+                                    {GENRE_EMOJI(shop.genre)}
                                   </div>
                                 </td>
 

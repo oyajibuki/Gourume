@@ -143,9 +143,6 @@ function doPost(e) {
         return createJsonResponse({ status: 'error', message: 'JSONパースエラー: ' + rawText });
       }
 
-      // ── Google Places APIで写真URLを取得 ──
-      shopInfo.imageUrl = fetchPlacesPhoto(shopInfo.name, shopInfo.address);
-
       // ── 重複チェック: 同じuserId + 同じ店名が既にあるか ──
       const allRows = sheet.getDataRange().getValues();
       const shopName = shopInfo.name || '';
@@ -339,60 +336,6 @@ function doGet(e) {
 function createJsonResponse(responseObject) {
   return ContentService.createTextOutput(JSON.stringify(responseObject))
     .setMimeType(ContentService.MimeType.JSON);
-}
-
-// ============================================================
-// Google Places API (New) で店舗写真URLを取得
-// ============================================================
-function fetchPlacesPhoto(shopName, address) {
-  try {
-    const placesApiKey = PropertiesService.getScriptProperties().getProperty('PLACES_API_KEY');
-    if (!placesApiKey) return '';
-
-    const query = [shopName, address].filter(Boolean).join(' ');
-    if (!query.trim()) return '';
-
-    // ① テキスト検索でplace_idと写真リファレンスを取得
-    const searchUrl = 'https://places.googleapis.com/v1/places:searchText';
-    const searchPayload = {
-      textQuery: query,
-      languageCode: 'ja'
-    };
-
-    const searchRes = UrlFetchApp.fetch(searchUrl, {
-      method: 'post',
-      contentType: 'application/json',
-      headers: {
-        'X-Goog-Api-Key': placesApiKey,
-        'X-Goog-FieldMask': 'places.photos'
-      },
-      payload: JSON.stringify(searchPayload),
-      muteHttpExceptions: true
-    });
-
-    if (searchRes.getResponseCode() !== 200) return '';
-
-    const searchJson = JSON.parse(searchRes.getContentText());
-    const places = searchJson.places;
-    if (!places || places.length === 0) return '';
-
-    const photos = places[0].photos;
-    if (!photos || photos.length === 0) return '';
-
-    // ② 写真リファレンスから写真URLを生成（最初の1枚）
-    const photoName = photos[0].name; // 例: places/xxx/photos/yyy
-    const photoUrl = `https://places.googleapis.com/v1/${photoName}/media?key=${placesApiKey}&maxWidthPx=400&skipHttpRedirect=true`;
-
-    const photoRes = UrlFetchApp.fetch(photoUrl, { muteHttpExceptions: true });
-    if (photoRes.getResponseCode() !== 200) return '';
-
-    const photoJson = JSON.parse(photoRes.getContentText());
-    return photoJson.photoUri || '';
-
-  } catch (err) {
-    Logger.log('Places API エラー: ' + err.toString());
-    return '';
-  }
 }
 
 // ============================================================
