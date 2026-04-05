@@ -1,0 +1,263 @@
+// ============================================================
+// GourmetClip — Google Apps Script バックエンド
+// ============================================================
+// 【重要】Gemini APIキーの設定方法：
+//   GASエディタ → 左メニュー「プロジェクトの設定」
+//   →「スクリプトプロパティ」→「プロパティを追加」
+//   プロパティ名: GEMINI_API_KEY
+//   値: あなたのGemini APIキー
+// ============================================================
+
+const SPREADSHEET_ID = '1uPuBBmEdSpuBxJWYTtSKnufnujPmBiJltUPNZ_4MLoo';
+const SHEET_NAME = 'Shops';
+
+// ============================================================
+// doPost: 新規追加 / 更新 / AI解析
+// ============================================================
+function doPost(e) {
+  try {
+    const sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(SHEET_NAME);
+    const data = JSON.parse(e.postData.contents);
+
+    // ── 1. 訪問済み・メモの更新 ──
+    if (data.action === 'update') {
+      const allData = sheet.getDataRange().getValues();
+      for (let i = 1; i < allData.length; i++) {
+        if (allData[i][0] == data.shop.id && allData[i][1] == data.userId) {
+          sheet.getRange(i + 1, 16).setValue(data.shop.visited);
+          sheet.getRange(i + 1, 17).setValue(data.shop.userMemo);
+          return createJsonResponse({ status: 'success', message: 'updated' });
+        }
+      }
+      return createJsonResponse({ status: 'error', message: 'shop not found' });
+    }
+
+    // ── 2. 画像をGeminiで解析して新規登録 ──
+    if (data.action === 'analyze') {
+      // Gemini APIキーをスクリプトプロパティから取得
+      const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+      if (!apiKey) {
+        return createJsonResponse({ status: 'error', message: 'GEMINI_API_KEY が未設定です。GASのスクリプトプロパティに追加してください。' });
+      }
+
+      // Gemini APIを呼び出す
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const prompt = `この画像はSNS（Instagram、X、食べログ、Rettyなど）の飲食店投稿スクリーンショットです。
+画像から読み取れる情報を以下のJSON形式で返してください。
+読み取れない項目は空文字("") or "-" にしてください。
+{
+  "prefecture": "都道府県（例: 東京都）",
+  "area": "エリア・市区町村（例: 渋谷区）",
+  "name": "店名",
+  "genre": "ジャンル（例: イタリアン・焼肉・ラーメン）",
+  "address": "住所",
+  "phone": "電話番号",
+  "budget": "予算（例: ¥3,000〜¥5,000）",
+  "hours": "営業時間",
+  "situations": ["シーン（例: デート, 女子会, 接待）"],
+  "reservable": "予約可否（例: 〇, △, ×）",
+  "webUrl": "公式サイトURL",
+  "imageUrl": ""
+}
+JSONのみ返してください。コードブロックや説明文は不要です。`;
+
+      const geminiPayload = {
+        contents: [{
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: data.mimeType || 'image/jpeg', data: data.imageBase64 } }
+          ]
+        }],
+        generationConfig: { temperature: 0.1 }
+      };
+
+      const geminiRes = UrlFetchApp.fetch(geminiUrl, {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify(geminiPayload),
+        muteHttpExceptions: true
+      });
+
+      const geminiJson = JSON.parse(geminiRes.getContentText());
+
+      if (!geminiJson.candidates || geminiJson.candidates.length === 0) {
+        return createJsonResponse({ status: 'error', message: 'Gemini APIからの応答が空です: ' + JSON.stringify(geminiJson) });
+      }
+
+      // JSONテキストを抽出（コードブロックを除去）
+      let rawText = geminiJson.candidates[0].content.parts[0].text.trim();
+      rawText = rawText.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+
+      let shopInfo;
+      try {
+        shopInfo = JSON.parse(rawText);
+      } catch (parseErr) {
+        return createJsonResponse({ status: 'error', message: 'JSONパースエラー: ' + rawText });
+      }
+
+      // シートに保存
+      const newId = new Date().getTime();
+      const rowData = [
+        newId,
+        data.userId || 'guest',
+        shopInfo.prefecture || '',
+        shopInfo.area || '',
+        shopInfo.name || '',
+        shopInfo.genre || '',
+        shopInfo.address || '',
+        shopInfo.phone || '',
+        shopInfo.budget || '',
+        shopInfo.hours || '',
+        Array.isArray(shopInfo.situations) ? shopInfo.situations.join(',') : (shopInfo.situations || ''),
+        data.dateAdded || new Date().toISOString().split('T')[0],
+        shopInfo.reservable || '',
+        shopInfo.webUrl || '',
+        shopInfo.imageUrl || '',
+        false,
+        ''
+      ];
+      sheet.appendRow(rowData);
+
+      // フロントエンドに返すデータ
+      const returnData = {
+        id: newId,
+        userId: data.userId || 'guest',
+        prefecture: shopInfo.prefecture || '',
+        area: shopInfo.area || '',
+        name: shopInfo.name || '',
+        genre: shopInfo.genre || '',
+        address: shopInfo.address || '',
+        phone: shopInfo.phone || '',
+        budget: shopInfo.budget || '',
+        hours: shopInfo.hours || '',
+        situations: Array.isArray(shopInfo.situations) ? shopInfo.situations : [],
+        dateAdded: data.dateAdded || new Date().toISOString().split('T')[0],
+        reservable: shopInfo.reservable || '',
+        webUrl: shopInfo.webUrl || '',
+        imageUrl: shopInfo.imageUrl || '',
+        visited: false,
+        userMemo: ''
+      };
+
+      return createJsonResponse({ status: 'success', data: returnData });
+    }
+
+    // ── 3. 手動入力による新規追加（action指定なし） ──
+    const rowData = [
+      data.id || new Date().getTime(),
+      data.userId || 'guest',
+      data.prefecture || '',
+      data.area || '',
+      data.name || '',
+      data.genre || '',
+      data.address || '',
+      data.phone || '',
+      data.budget || '',
+      data.hours || '',
+      Array.isArray(data.situations) ? data.situations.join(',') : (data.situations || ''),
+      data.dateAdded || new Date().toISOString().split('T')[0],
+      data.reservable || '',
+      data.webUrl || '',
+      data.imageUrl || '',
+      data.visited || false,
+      data.userMemo || ''
+    ];
+    sheet.appendRow(rowData);
+    return createJsonResponse({ status: 'success', data: rowData });
+
+  } catch (error) {
+    return createJsonResponse({ status: 'error', message: error.toString() });
+  }
+}
+
+// ============================================================
+// doGet: ユーザーのお店一覧を取得
+// ============================================================
+function doGet(e) {
+  try {
+    const sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+
+    if (data.length <= 1) {
+      return createJsonResponse({ status: 'success', data: [] });
+    }
+
+    const keys = data[0];
+    const result = [];
+    const targetUserId = e.parameter.userId;
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const obj = {};
+      for (let j = 0; j < keys.length; j++) {
+        obj[keys[j]] = row[j];
+      }
+
+      obj.situations = obj.situations ? String(obj.situations).split(',').filter(s => s) : [];
+      obj.visited = (obj.visited === true || obj.visited === 'true' || obj.visited === 'TRUE');
+
+      if (!targetUserId || obj.userId === targetUserId) {
+        result.push(obj);
+      }
+    }
+
+    return createJsonResponse({ status: 'success', data: result });
+
+  } catch (error) {
+    return createJsonResponse({ status: 'error', message: error.toString() });
+  }
+}
+
+// ============================================================
+// ヘルパー
+// ============================================================
+function createJsonResponse(responseObject) {
+  return ContentService.createTextOutput(JSON.stringify(responseObject))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ============================================================
+// 【権限承認用】GASエディタから一度だけ手動で実行してください
+// UrlFetchApp（外部API呼び出し）とSpreadsheetの権限を付与します
+// ============================================================
+function authorizeScript() {
+  const testRes = UrlFetchApp.fetch('https://www.google.com', { muteHttpExceptions: true });
+  Logger.log('UrlFetchApp OK: ' + testRes.getResponseCode());
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(SHEET_NAME);
+  Logger.log('Spreadsheet OK: ' + sheet.getName());
+  Logger.log('✅ 権限承認が完了しました！');
+}
+
+// ============================================================
+// 【デバッグ用】Gemini APIキーと接続をテストする
+// GASエディタから手動で実行してログを確認してください
+// ============================================================
+function testGeminiApi() {
+  const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  Logger.log('APIキー取得: ' + (apiKey ? '✅ 取得できた（' + apiKey.substring(0, 8) + '...）' : '❌ 取得できない（スクリプトプロパティを確認）'));
+
+  if (!apiKey) return;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const payload = {
+    contents: [{ parts: [{ text: '「テスト成功」とだけ答えてください' }] }]
+  };
+
+  try {
+    const res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    Logger.log('HTTPステータス: ' + res.getResponseCode());
+    const json = JSON.parse(res.getContentText());
+    if (json.candidates) {
+      Logger.log('✅ Gemini応答: ' + json.candidates[0].content.parts[0].text);
+    } else {
+      Logger.log('❌ エラー応答: ' + JSON.stringify(json));
+    }
+  } catch (err) {
+    Logger.log('❌ 例外: ' + err.toString());
+  }
+}
