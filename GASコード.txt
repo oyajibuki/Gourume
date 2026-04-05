@@ -129,14 +129,71 @@ function doPost(e) {
         return createJsonResponse({ status: 'error', message: 'JSONパースエラー: ' + rawText });
       }
 
-      // シートに保存
+      // ── 重複チェック: 同じuserId + 同じ店名が既にあるか ──
+      const allRows = sheet.getDataRange().getValues();
+      const shopName = shopInfo.name || '';
+      const userId = data.userId || 'guest';
+      let duplicateRowIndex = -1;
+      let duplicateCount = 0;
+
+      // 1行目がヘッダーかデータか判定
+      const firstCell = allRows.length > 0 ? allRows[0][0] : '';
+      const dataStartRow = (!isNaN(Number(firstCell)) && firstCell !== '') ? 0 : 1;
+
+      const shopPrefecture = shopInfo.prefecture || '';
+      const shopArea       = shopInfo.area || '';
+
+      for (let i = dataStartRow; i < allRows.length; i++) {
+        const rowUserId     = String(allRows[i][1]);
+        const rowPrefecture = String(allRows[i][2]);
+        const rowArea       = String(allRows[i][3]);
+        const rowName       = String(allRows[i][4]);
+        // prefecture + area + name の3つすべて一致 かつ 同じユーザー
+        if (rowUserId === userId && rowPrefecture === shopPrefecture && rowArea === shopArea && rowName === shopName) {
+          duplicateCount++;
+          duplicateRowIndex = i;
+        }
+      }
+
+      if (duplicateCount > 0) {
+        // 重複あり → 既存行のメモを「xx回目の登録です」に更新してそのまま返す
+        const newCount = duplicateCount + 1;
+        const newMemo = `${newCount}回目の登録です`;
+        sheet.getRange(duplicateRowIndex + 1, 17).setValue(newMemo); // Q列=userMemo
+
+        const existingId = String(allRows[duplicateRowIndex][0]);
+        const returnData = {
+          id: existingId,
+          userId: userId,
+          prefecture: String(allRows[duplicateRowIndex][2]),
+          area:       String(allRows[duplicateRowIndex][3]),
+          name:       shopName,
+          genre:      String(allRows[duplicateRowIndex][5]),
+          address:    String(allRows[duplicateRowIndex][6]),
+          phone:      String(allRows[duplicateRowIndex][7]),
+          budget:     String(allRows[duplicateRowIndex][8]),
+          hours:      String(allRows[duplicateRowIndex][9]),
+          situations: String(allRows[duplicateRowIndex][10]).split(',').filter(s => s),
+          dateAdded:  String(allRows[duplicateRowIndex][11]),
+          reservable: String(allRows[duplicateRowIndex][12]),
+          webUrl:     String(allRows[duplicateRowIndex][13]),
+          imageUrl:   String(allRows[duplicateRowIndex][14]),
+          visited:    allRows[duplicateRowIndex][15] === true || allRows[duplicateRowIndex][15] === 'TRUE',
+          userMemo:   newMemo,
+          isDuplicate: true,
+          duplicateCount: newCount
+        };
+        return createJsonResponse({ status: 'success', data: returnData });
+      }
+
+      // ── 新規登録 ──
       const newId = new Date().getTime();
       const rowData = [
         newId,
-        data.userId || 'guest',
+        userId,
         shopInfo.prefecture || '',
         shopInfo.area || '',
-        shopInfo.name || '',
+        shopName,
         shopInfo.genre || '',
         shopInfo.address || '',
         shopInfo.phone || '',
@@ -154,10 +211,10 @@ function doPost(e) {
 
       const returnData = {
         id: newId,
-        userId: data.userId || 'guest',
+        userId: userId,
         prefecture: shopInfo.prefecture || '',
         area: shopInfo.area || '',
-        name: shopInfo.name || '',
+        name: shopName,
         genre: shopInfo.genre || '',
         address: shopInfo.address || '',
         phone: shopInfo.phone || '',
@@ -169,7 +226,8 @@ function doPost(e) {
         webUrl: shopInfo.webUrl || '',
         imageUrl: shopInfo.imageUrl || '',
         visited: false,
-        userMemo: ''
+        userMemo: '',
+        isDuplicate: false
       };
 
       return createJsonResponse({ status: 'success', data: returnData });
