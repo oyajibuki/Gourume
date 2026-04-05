@@ -50,6 +50,7 @@ export default function App() {
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [rateLimitError, setRateLimitError] = useState(false);
+  const [fetchDebug, setFetchDebug] = useState(null); // デバッグ用: 取得件数など
   const fileInputRef = useRef(null);
 
   const [userName, setUserName] = useState("");
@@ -71,7 +72,14 @@ export default function App() {
         })
         .then(data => {
           if (data.status === 'success') {
-            setShops(data.data);
+            const list = Array.isArray(data.data) ? data.data : [];
+            setShops(list);
+            // デバッグ情報を保存
+            setFetchDebug({
+              count: list.length,
+              deviceId: user.id,
+              raw: data.debug || null
+            });
           } else {
             setErrorMessage(`データ取得エラー: ${data.message}`);
           }
@@ -377,8 +385,24 @@ export default function App() {
                       <td colSpan="11" className="py-16 text-center text-gray-400">
                         <div className="flex flex-col items-center gap-3">
                           <Camera size={40} className="text-orange-300" />
-                          <p className="font-medium">まだお店がありません</p>
-                          <p className="text-sm">「＋ スクショ追加」からSNSの飲食店スクショを登録しよう！</p>
+                          {fetchDebug !== null && fetchDebug.count > 0 ? (
+                            <>
+                              <p className="font-medium text-amber-600">⚠️ {fetchDebug.count}件取得できましたが表示できません</p>
+                              <p className="text-xs text-gray-400 bg-gray-100 px-3 py-2 rounded font-mono">device_id: {fetchDebug.deviceId}</p>
+                              <p className="text-xs text-gray-400">スプレッドシートのヘッダー行を確認してください</p>
+                            </>
+                          ) : fetchDebug !== null && fetchDebug.count === 0 ? (
+                            <>
+                              <p className="font-medium">このデバイスのデータは見つかりませんでした</p>
+                              <p className="text-xs text-gray-400 bg-gray-100 px-3 py-2 rounded font-mono">device_id: {fetchDebug.deviceId}</p>
+                              <p className="text-sm">「＋ スクショ追加」からSNSの飲食店スクショを登録しよう！</p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="font-medium">まだお店がありません</p>
+                              <p className="text-sm">「＋ スクショ追加」からSNSの飲食店スクショを登録しよう！</p>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>

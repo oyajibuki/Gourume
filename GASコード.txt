@@ -205,36 +205,53 @@ function doPost(e) {
 
 // ============================================================
 // doGet: ユーザーのお店一覧を取得
+// ヘッダー行に依存せず固定カラム名で読み込む（ヘッダーありでも自動スキップ）
 // ============================================================
 function doGet(e) {
   try {
     const sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(SHEET_NAME);
     const data = sheet.getDataRange().getValues();
 
-    if (data.length <= 1) {
-      return createJsonResponse({ status: 'success', data: [] });
+    if (data.length === 0) {
+      return createJsonResponse({ status: 'success', data: [], debug: 'シートが空です' });
     }
 
-    const keys = data[0];
-    const result = [];
-    const targetUserId = e.parameter.userId;
+    // 固定カラム定義（appendRowの順番と一致）
+    const COLUMNS = ['id','userId','prefecture','area','name','genre','address','phone','budget','hours','situations','dateAdded','reservable','webUrl','imageUrl','visited','userMemo'];
 
-    for (let i = 1; i < data.length; i++) {
+    // 1行目がヘッダーかデータか自動判定
+    // id列（1列目）が数値ならデータ行、文字列ならヘッダー行
+    const firstCellValue = data[0][0];
+    const startRow = (!isNaN(Number(firstCellValue)) && firstCellValue !== '') ? 0 : 1;
+
+    const targetUserId = e.parameter.userId;
+    const result = [];
+    let totalRows = 0;
+
+    for (let i = startRow; i < data.length; i++) {
       const row = data[i];
+      if (!row[0]) continue; // id空行はスキップ
+      totalRows++;
+
       const obj = {};
-      for (let j = 0; j < keys.length; j++) {
-        obj[keys[j]] = row[j];
+      for (let j = 0; j < COLUMNS.length; j++) {
+        obj[COLUMNS[j]] = (row[j] !== undefined && row[j] !== null) ? row[j] : '';
       }
 
+      obj.id = String(obj.id); // idを文字列化
       obj.situations = obj.situations ? String(obj.situations).split(',').filter(s => s) : [];
       obj.visited = (obj.visited === true || obj.visited === 'true' || obj.visited === 'TRUE');
 
-      if (!targetUserId || obj.userId === targetUserId) {
+      if (!targetUserId || String(obj.userId) === String(targetUserId)) {
         result.push(obj);
       }
     }
 
-    return createJsonResponse({ status: 'success', data: result });
+    return createJsonResponse({
+      status: 'success',
+      data: result,
+      debug: `全${totalRows}行中 ${result.length}件マッチ (userId=${targetUserId}, startRow=${startRow})`
+    });
 
   } catch (error) {
     return createJsonResponse({ status: 'error', message: error.toString() });
