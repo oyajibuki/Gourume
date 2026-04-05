@@ -168,9 +168,7 @@ JSONのみで返してください（説明不要）：
 
       // 店名が空の場合はOCR結果で補完
       if (!shopInfo.name) shopInfo.name = ocrInfo.name;
-
-      // ── Step 3: Places API で写真取得 ──
-      shopInfo.imageUrl = fetchPlacesPhoto(shopInfo.name, shopInfo.address || shopInfo.area);
+      shopInfo.imageUrl = '';
 
       // ── 重複チェック: 同じuserId + 同じ店名が既にあるか ──
       const allRows = sheet.getDataRange().getValues();
@@ -365,46 +363,6 @@ function doGet(e) {
 function createJsonResponse(responseObject) {
   return ContentService.createTextOutput(JSON.stringify(responseObject))
     .setMimeType(ContentService.MimeType.JSON);
-}
-
-// ============================================================
-// Google Places API (New) で店舗写真URLを取得
-// ============================================================
-function fetchPlacesPhoto(shopName, hint) {
-  try {
-    const placesApiKey = PropertiesService.getScriptProperties().getProperty('PLACES_API_KEY');
-    if (!placesApiKey) return '';
-
-    const query = [shopName, hint].filter(Boolean).join(' ');
-    if (!query.trim()) return '';
-
-    const searchRes = UrlFetchApp.fetch('https://places.googleapis.com/v1/places:searchText', {
-      method: 'post',
-      contentType: 'application/json',
-      headers: {
-        'X-Goog-Api-Key': placesApiKey,
-        'X-Goog-FieldMask': 'places.photos'
-      },
-      payload: JSON.stringify({ textQuery: query, languageCode: 'ja' }),
-      muteHttpExceptions: true
-    });
-
-    if (searchRes.getResponseCode() !== 200) return '';
-    const searchJson = JSON.parse(searchRes.getContentText());
-    const photos = searchJson.places?.[0]?.photos;
-    if (!photos || photos.length === 0) return '';
-
-    const photoRes = UrlFetchApp.fetch(
-      `https://places.googleapis.com/v1/${photos[0].name}/media?key=${placesApiKey}&maxWidthPx=400&skipHttpRedirect=true`,
-      { muteHttpExceptions: true }
-    );
-    if (photoRes.getResponseCode() !== 200) return '';
-    return JSON.parse(photoRes.getContentText()).photoUri || '';
-
-  } catch (err) {
-    Logger.log('Places API エラー: ' + err.toString());
-    return '';
-  }
 }
 
 // ============================================================
