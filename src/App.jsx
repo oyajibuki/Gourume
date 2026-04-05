@@ -342,8 +342,8 @@ export default function App() {
             <AlertCircle size={18} className="text-amber-500 flex-shrink-0 mt-0.5" />
             <div className="flex-1 text-sm">
               <p className="font-bold text-amber-800">⚠️ APIの利用制限に達しました</p>
-              <p className="text-amber-700">無料枠の上限：<span className="font-medium">1分間に15回</span> または <span className="font-medium">1日に1,500回</span>まで</p>
-              <p className="text-amber-600 text-xs mt-1">しばらく待ってから再度お試しください。</p>
+              <p className="text-amber-700">無料枠の上限：<span className="font-medium">1分間に10回</span> または <span className="font-medium">1日に500回</span>まで</p>
+              <p className="text-amber-600 text-xs mt-1">1分待つか、本日の上限に達した場合は明日（0時リセット）再度お試しください。</p>
             </div>
             <button onClick={() => setRateLimitError(false)} className="text-amber-400 hover:text-amber-600 text-xs flex-shrink-0">✕</button>
           </div>
