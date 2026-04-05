@@ -97,69 +97,21 @@ function doPost(e) {
 
       Logger.log('OCR結果: ' + JSON.stringify(ocrInfo));
 
-      // ── Step 2: compound-beta Web検索 → 全カラム補完（画像なし・テキストのみ） ──
-      const searchQuery = ocrInfo.name + (ocrInfo.location ? ' ' + ocrInfo.location : '');
-      const searchRes = UrlFetchApp.fetch(groqUrl, {
-        method: 'post',
-        contentType: 'application/json',
-        headers: { 'Authorization': 'Bearer ' + apiKey },
-        payload: JSON.stringify({
-          model: 'compound-beta',
-          messages: [
-            {
-              role: 'system',
-              content: '你是餐厅信息搜索助手。You are a restaurant info assistant. Search the web for the restaurant and return ONLY a JSON object. No explanation, no markdown, no code block. Just raw JSON.'
-            },
-            {
-              role: 'user',
-              content: `Search the web for the Japanese restaurant "${searchQuery}" and fill in ALL fields below with accurate information from food sites like tabelog, gurunavi, hotpepper, or official site.
-
-Return ONLY this JSON (no code block, no explanation):
-{
-  "prefecture": "都道府県のみ（例: 東京都、神奈川県）",
-  "area": "市区町村のみ（例: 渋谷区、横浜市中区）※都道府県は含めない",
-  "name": "正式な店名",
-  "genre": "料理ジャンル（例: ラーメン、焼肉、中華料理、イタリアン）※必ず埋める",
-  "address": "番地まで含む完全な住所",
-  "phone": "電話番号（ハイフン区切り）",
-  "budget": "1人あたりの予算（例: ¥1,000〜¥2,000）",
-  "hours": "営業時間と定休日（例: 11:00〜22:00、火曜定休）",
-  "situations": ["利用シーン（デート/女子会/接待/家族/友人/一人など）"],
-  "reservable": "予約可否（〇=可、△=一部可、×=不可）",
-  "webUrl": "公式サイトまたは食べログURL",
-  "imageUrl": ""
-}`
-            }
-          ],
-          temperature: 0.1,
-          max_tokens: 1024
-        }),
-        muteHttpExceptions: true
-      });
-
-      if (searchRes.getResponseCode() === 429) {
-        return createJsonResponse({ status: 'error', isRateLimit: true, message: 'APIレート制限に達しました。1分ほど待ってから再度お試しください。' });
-      }
-
-      let shopInfo;
-      if (searchRes.getResponseCode() !== 200) {
-        // Web検索失敗時はOCR結果だけで登録
-        shopInfo = { name: ocrInfo.name, prefecture: '', area: ocrInfo.location || '', genre: '', address: '', phone: '', budget: '', hours: '', situations: [], reservable: '', webUrl: '', imageUrl: '' };
-      } else {
-        const searchJson = JSON.parse(searchRes.getContentText());
-        let rawText = searchJson.choices[0].message.content.trim()
-          .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
-        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) rawText = jsonMatch[0];
-        try {
-          shopInfo = JSON.parse(rawText);
-        } catch(e) {
-          shopInfo = { name: ocrInfo.name, prefecture: '', area: ocrInfo.location || '', genre: '', address: '', phone: '', budget: '', hours: '', situations: [], reservable: '', webUrl: '', imageUrl: '' };
-        }
-      }
-
-      if (!shopInfo.name) shopInfo.name = ocrInfo.name;
-      shopInfo.imageUrl = '';
+      // Step 2なし: OCR結果をそのままshopInfoに変換
+      const shopInfo = {
+        name: ocrInfo.name,
+        prefecture: '',
+        area: ocrInfo.location || '',
+        genre: '',
+        address: '',
+        phone: '',
+        budget: '',
+        hours: '',
+        situations: [],
+        reservable: '',
+        webUrl: '',
+        imageUrl: ''
+      };
 
       // ── 重複チェック: 同じuserId + 同じ店名が既にあるか ──
       const allRows = sheet.getDataRange().getValues();
