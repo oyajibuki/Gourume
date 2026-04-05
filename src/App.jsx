@@ -23,22 +23,23 @@ const fileToBase64 = (file) => {
 
 // ==========================================
 // 📱 端末固有ID管理
-// 同じブラウザ・端末なら何度ログインし直しても同じIDを使い回す
-// localStorageから絶対に消えない（userプロフィールとは独立）
 // ==========================================
-const getOrCreateDeviceId = () => {
-  let deviceId = localStorage.getItem('gourmet_clip_device_id');
-  if (!deviceId) {
-    deviceId = 'device_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    localStorage.setItem('gourmet_clip_device_id', deviceId);
-  }
-  return deviceId;
+const getDeviceId = () => localStorage.getItem('gourmet_clip_device_id');
+
+const createDeviceId = () => {
+  const id = 'device_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  localStorage.setItem('gourmet_clip_device_id', id);
+  return id;
 };
 
 export default function App() {
+  // device_idがあれば自動ログイン（プロフィールがなくてもOK）
   const [user, setUser] = useState(() => {
-    const savedUser = localStorage.getItem('gourmet_clip_user');
-    return savedUser ? JSON.parse(savedUser) : null;
+    const deviceId = getDeviceId();
+    if (!deviceId) return null; // 初回のみ登録画面へ
+    const savedProfile = localStorage.getItem('gourmet_clip_user');
+    const profile = savedProfile ? JSON.parse(savedProfile) : { name: 'ゲスト', ageGroup: '不明', gender: '不明' };
+    return { ...profile, id: deviceId };
   });
 
   const [shops, setShops] = useState([]);
@@ -84,8 +85,7 @@ export default function App() {
   }, [user]);
 
   // ==========================================
-  // ユーザー登録
-  // device_idを使い回すことで同じ端末・ブラウザなら常に同じデータ
+  // ユーザー登録（初回のみ）
   // ==========================================
   const handleStart = (e) => {
     e.preventDefault();
@@ -93,8 +93,8 @@ export default function App() {
       alert("お名前（ニックネーム）を入力してください");
       return;
     }
-    // 端末固有ID（永続・消えない）をユーザーIDとして使用
-    const deviceId = getOrCreateDeviceId();
+    // 初回だけdevice_idを新規生成、以降は永続使用
+    const deviceId = createDeviceId();
     const newUser = { name: userName, ageGroup, gender, id: deviceId };
     localStorage.setItem('gourmet_clip_user', JSON.stringify(newUser));
     setUser(newUser);
@@ -210,22 +210,19 @@ export default function App() {
     return groups;
   }, [filteredShops]);
 
-  // プロフィール変更（データは消えない・device_idは維持される）
+  // プロフィール名だけ変更（device_idは絶対消さない・データ残る）
   const handleEditProfile = () => {
-    if (window.confirm("プロフィールを変更しますか？\n（登録済みのお店データはそのまま残ります）")) {
-      localStorage.removeItem('gourmet_clip_user');
-      setUser(null);
-      setShops([]);
-    }
+    const newName = window.prompt("新しいニックネームを入力してください", user.name);
+    if (!newName || !newName.trim()) return;
+    const updatedUser = { ...user, name: newName.trim() };
+    localStorage.setItem('gourmet_clip_user', JSON.stringify(updatedUser));
+    setUser(updatedUser);
   };
 
   // ==========================================
-  // UI レンダー：登録画面
+  // UI レンダー：登録画面（初回のみ・device_idがない場合）
   // ==========================================
   if (!user) {
-    // 既存のdevice_idがあれば「おかえり」表示
-    const existingDeviceId = localStorage.getItem('gourmet_clip_device_id');
-
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4 font-sans">
         <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
@@ -235,9 +232,6 @@ export default function App() {
             </div>
           </div>
           <h1 className="text-2xl font-bold text-center text-gray-800 mb-2">GourmetClip</h1>
-          {existingDeviceId ? (
-            <p className="text-center text-orange-500 text-sm font-medium mb-2">おかえりなさい！データはそのまま残っています</p>
-          ) : null}
           <p className="text-center text-gray-500 text-sm mb-8">面倒な登録なし！あなただけのリストを作ろう</p>
 
           <form onSubmit={handleStart} className="space-y-6">
@@ -263,7 +257,7 @@ export default function App() {
               </select>
             </div>
             <button type="submit" className="w-full bg-orange-600 text-white font-bold py-3 rounded-xl hover:bg-orange-700 transition-colors shadow-md">
-              {existingDeviceId ? 'データを読み込む' : 'はじめる'}
+              はじめる
             </button>
           </form>
         </div>
