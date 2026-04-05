@@ -1,13 +1,11 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
-  Search, Camera, Loader2, Globe, MapPin, Phone, AlertCircle
+  Search, Camera, Loader2, Globe, MapPin, Phone, AlertCircle, Settings
 } from 'lucide-react';
 
 // ==========================================
 // 🚀 外部API連携の設定
 // ==========================================
-// GAS（Google Apps Script）のURL
-// ※Gemini APIキーはGAS側のスクリプトプロパティで管理（このコードには含まない）
 const GAS_URL = "https://script.google.com/macros/s/AKfycbxjXsyubrqHgW_yQ3TMpu33mIsQMw-gH40ISIAPVSTa30g0AtPlFf137MhyP_tdhm9b/exec";
 
 // --- ヘルパー関数: 画像ファイルをBase64文字列に変換 ---
@@ -23,6 +21,20 @@ const fileToBase64 = (file) => {
   });
 };
 
+// ==========================================
+// 📱 端末固有ID管理
+// 同じブラウザ・端末なら何度ログインし直しても同じIDを使い回す
+// localStorageから絶対に消えない（userプロフィールとは独立）
+// ==========================================
+const getOrCreateDeviceId = () => {
+  let deviceId = localStorage.getItem('gourmet_clip_device_id');
+  if (!deviceId) {
+    deviceId = 'device_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    localStorage.setItem('gourmet_clip_device_id', deviceId);
+  }
+  return deviceId;
+};
+
 export default function App() {
   const [user, setUser] = useState(() => {
     const savedUser = localStorage.getItem('gourmet_clip_user');
@@ -36,6 +48,7 @@ export default function App() {
   const [filterVisited, setFilterVisited] = useState("all");
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [rateLimitError, setRateLimitError] = useState(false);
   const fileInputRef = useRef(null);
 
   const [userName, setUserName] = useState("");
@@ -72,6 +85,7 @@ export default function App() {
 
   // ==========================================
   // ユーザー登録
+  // device_idを使い回すことで同じ端末・ブラウザなら常に同じデータ
   // ==========================================
   const handleStart = (e) => {
     e.preventDefault();
@@ -79,8 +93,9 @@ export default function App() {
       alert("お名前（ニックネーム）を入力してください");
       return;
     }
-    const uniqueId = "user_" + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    const newUser = { name: userName, ageGroup, gender, id: uniqueId };
+    // 端末固有ID（永続・消えない）をユーザーIDとして使用
+    const deviceId = getOrCreateDeviceId();
+    const newUser = { name: userName, ageGroup, gender, id: deviceId };
     localStorage.setItem('gourmet_clip_user', JSON.stringify(newUser));
     setUser(newUser);
   };
@@ -95,16 +110,14 @@ export default function App() {
 
     setIsAnalyzing(true);
     setErrorMessage("");
+    setRateLimitError(false);
 
     try {
-      // 1. 画像をBase64に変換
       const base64Data = await fileToBase64(file);
       const mimeType = file.type || "image/jpeg";
       const today = new Date();
       const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-      // 2. GASに画像を送信してAI解析＋シート保存を依頼
-      //    ※Gemini APIキーはGAS側のスクリプトプロパティに保存済み
       const response = await fetch(GAS_URL, {
         method: 'POST',
         headers: { "Content-Type": "text/plain" },
@@ -120,11 +133,16 @@ export default function App() {
 
       const result = await response.json();
 
+      // レート制限エラーの専用表示
+      if (result.isRateLimit) {
+        setRateLimitError(true);
+        return;
+      }
+
       if (result.status !== 'success' || !result.data) {
         throw new Error(result.message || "解析に失敗しました");
       }
 
-      // 3. 解析結果を画面に追加
       setShops(prev => [result.data, ...prev]);
       if (fileInputRef.current) fileInputRef.current.value = "";
 
@@ -192,8 +210,9 @@ export default function App() {
     return groups;
   }, [filteredShops]);
 
-  const handleReset = () => {
-    if (window.confirm("データをリセットして最初の画面に戻りますか？\n（※スプレッドシートのデータは消えません）")) {
+  // プロフィール変更（データは消えない・device_idは維持される）
+  const handleEditProfile = () => {
+    if (window.confirm("プロフィールを変更しますか？\n（登録済みのお店データはそのまま残ります）")) {
       localStorage.removeItem('gourmet_clip_user');
       setUser(null);
       setShops([]);
@@ -204,6 +223,9 @@ export default function App() {
   // UI レンダー：登録画面
   // ==========================================
   if (!user) {
+    // 既存のdevice_idがあれば「おかえり」表示
+    const existingDeviceId = localStorage.getItem('gourmet_clip_device_id');
+
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4 font-sans">
         <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
@@ -213,6 +235,9 @@ export default function App() {
             </div>
           </div>
           <h1 className="text-2xl font-bold text-center text-gray-800 mb-2">GourmetClip</h1>
+          {existingDeviceId ? (
+            <p className="text-center text-orange-500 text-sm font-medium mb-2">おかえりなさい！データはそのまま残っています</p>
+          ) : null}
           <p className="text-center text-gray-500 text-sm mb-8">面倒な登録なし！あなただけのリストを作ろう</p>
 
           <form onSubmit={handleStart} className="space-y-6">
@@ -238,7 +263,7 @@ export default function App() {
               </select>
             </div>
             <button type="submit" className="w-full bg-orange-600 text-white font-bold py-3 rounded-xl hover:bg-orange-700 transition-colors shadow-md">
-              はじめる
+              {existingDeviceId ? 'データを読み込む' : 'はじめる'}
             </button>
           </form>
         </div>
@@ -254,15 +279,24 @@ export default function App() {
       <header className="bg-white sticky top-0 z-10 shadow-sm flex-shrink-0">
         <div className="p-4 flex flex-col md:flex-row md:justify-between md:items-center gap-4 border-b border-gray-100">
           <div className="flex justify-between items-center w-full md:w-auto">
-            <h1 className="text-xl font-bold text-orange-600 flex items-center gap-2 cursor-pointer"
-              onClick={handleReset} title="クリックでリセット">
+            <h1 className="text-xl font-bold text-orange-600 flex items-center gap-2">
               <Camera size={24} />
               {user.name}のGourmetClip
             </h1>
-            <button onClick={() => fileInputRef.current?.click()} disabled={isAnalyzing}
-              className="bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-orange-700 transition-colors disabled:opacity-50 md:hidden">
-              {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : "+ 追加"}
-            </button>
+            <div className="flex items-center gap-2">
+              {/* レート制限バナー（モバイル） */}
+              <button
+                onClick={handleEditProfile}
+                className="p-2 text-gray-400 hover:text-gray-600 transition-colors md:hidden"
+                title="プロフィール変更"
+              >
+                <Settings size={18} />
+              </button>
+              <button onClick={() => fileInputRef.current?.click()} disabled={isAnalyzing}
+                className="bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-orange-700 transition-colors disabled:opacity-50 md:hidden">
+                {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : "+ 追加"}
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 w-full md:w-auto flex-1 md:max-w-xl">
@@ -283,10 +317,30 @@ export default function App() {
               className="hidden md:flex bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-bold items-center gap-2 hover:bg-orange-700 transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-50">
               {isAnalyzing ? <><Loader2 size={16} className="animate-spin" /> 解析中...</> : "+ スクショ追加"}
             </button>
+            <button
+              onClick={handleEditProfile}
+              className="hidden md:flex p-2 text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
+              title="プロフィール変更"
+            >
+              <Settings size={20} />
+            </button>
           </div>
 
           <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleImageUpload} />
         </div>
+
+        {/* レート制限エラーバナー */}
+        {rateLimitError && (
+          <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 flex items-start gap-3">
+            <AlertCircle size={18} className="text-amber-500 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 text-sm">
+              <p className="font-bold text-amber-800">⚠️ APIの利用制限に達しました</p>
+              <p className="text-amber-700">無料枠の上限：<span className="font-medium">1分間に15回</span> または <span className="font-medium">1日に1,500回</span>まで</p>
+              <p className="text-amber-600 text-xs mt-1">しばらく待ってから再度お試しください。</p>
+            </div>
+            <button onClick={() => setRateLimitError(false)} className="text-amber-400 hover:text-amber-600 text-xs flex-shrink-0">✕</button>
+          </div>
+        )}
       </header>
 
       <main className="flex-1 p-4 md:p-6 overflow-hidden flex flex-col">
