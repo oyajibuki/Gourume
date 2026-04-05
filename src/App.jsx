@@ -50,8 +50,10 @@ export default function App() {
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [rateLimitError, setRateLimitError] = useState(false);
-  const [fetchDebug, setFetchDebug] = useState(null); // デバッグ用: 取得件数など
+  const [fetchDebug, setFetchDebug] = useState(null);
+  const [popupShopId, setPopupShopId] = useState(null); // チェックボタンポップアップ
   const fileInputRef = useRef(null);
+  const popupRef = useRef(null);
 
   const [userName, setUserName] = useState("");
   const [ageGroup, setAgeGroup] = useState("20代");
@@ -162,11 +164,23 @@ export default function App() {
     }
   };
 
+  // ポップアップ外クリックで閉じる
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (popupRef.current && !popupRef.current.contains(e.target)) {
+        setPopupShopId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const toggleVisited = (shopId) => {
     const targetShop = shops.find(s => s.id === shopId);
     if (!targetShop) return;
     const updatedVisited = !targetShop.visited;
     setShops(shops.map(shop => shop.id === shopId ? { ...shop, visited: updatedVisited } : shop));
+    setPopupShopId(null);
 
     fetch(GAS_URL, {
       method: 'POST',
@@ -174,6 +188,18 @@ export default function App() {
       body: JSON.stringify({ action: 'update', userId: user.id, shop: { id: shopId, visited: updatedVisited, userMemo: targetShop.userMemo } }),
       redirect: 'follow'
     }).catch(err => console.error("更新エラー:", err));
+  };
+
+  const deleteShop = (shopId) => {
+    setShops(prev => prev.filter(s => s.id !== shopId));
+    setPopupShopId(null);
+
+    fetch(GAS_URL, {
+      method: 'POST',
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ action: 'delete', userId: user.id, shopId }),
+      redirect: 'follow'
+    }).catch(err => console.error("削除エラー:", err));
   };
 
   const updateMemo = (shopId, newMemo) => {
@@ -423,11 +449,39 @@ export default function App() {
                             </tr>
                             {areaShops.map((shop) => (
                               <tr key={shop.id} className={`hover:bg-gray-50 transition-colors ${shop.visited ? 'bg-gray-50 opacity-60' : ''}`}>
-                                <td className="py-3 px-4 text-center">
-                                  <input type="checkbox" checked={shop.visited || false}
-                                    onChange={() => toggleVisited(shop.id)}
-                                    className="w-4 h-4 text-orange-600 rounded border-gray-300 focus:ring-orange-500 cursor-pointer"
-                                  />
+                                <td className="py-3 px-4 text-center relative">
+                                  <button
+                                    onClick={() => setPopupShopId(popupShopId === shop.id ? null : shop.id)}
+                                    className={`w-6 h-6 rounded border-2 flex items-center justify-center cursor-pointer transition-colors ${shop.visited ? 'bg-orange-500 border-orange-500 text-white' : 'border-gray-300 hover:border-orange-400'}`}
+                                    title="クリックでメニュー表示"
+                                  >
+                                    {shop.visited && <span className="text-xs font-bold">✓</span>}
+                                  </button>
+
+                                  {/* ポップアップメニュー */}
+                                  {popupShopId === shop.id && (
+                                    <div ref={popupRef} className="absolute z-50 left-1/2 -translate-x-1/2 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden w-36">
+                                      <button
+                                        onClick={() => toggleVisited(shop.id)}
+                                        className="w-full px-4 py-2.5 text-sm text-left hover:bg-orange-50 flex items-center gap-2 text-gray-700"
+                                      >
+                                        <span>{shop.visited ? '⬜' : '✅'}</span>
+                                        <span>{shop.visited ? '未訪問に戻す' : '訪問済みにする'}</span>
+                                      </button>
+                                      <div className="border-t border-gray-100" />
+                                      <button
+                                        onClick={() => {
+                                          if (window.confirm(`「${shop.name}」を削除しますか？`)) {
+                                            deleteShop(shop.id);
+                                          }
+                                        }}
+                                        className="w-full px-4 py-2.5 text-sm text-left hover:bg-red-50 flex items-center gap-2 text-red-500"
+                                      >
+                                        <span>🗑️</span>
+                                        <span>削除する</span>
+                                      </button>
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="py-3 px-4 text-sm text-gray-600">
                                   <span className="bg-gray-100 px-2 py-1 rounded-md text-xs">{shop.genre}</span>

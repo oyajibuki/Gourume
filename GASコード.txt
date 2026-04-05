@@ -19,6 +19,20 @@ function doPost(e) {
     const sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(SHEET_NAME);
     const data = JSON.parse(e.postData.contents);
 
+    // ── 0. 削除 ──
+    if (data.action === 'delete') {
+      const allData = sheet.getDataRange().getValues();
+      const firstCell = allData.length > 0 ? allData[0][0] : '';
+      const startRow = (!isNaN(Number(firstCell)) && firstCell !== '') ? 0 : 1;
+      for (let i = startRow; i < allData.length; i++) {
+        if (String(allData[i][0]) === String(data.shopId) && String(allData[i][1]) === String(data.userId)) {
+          sheet.deleteRow(i + 1);
+          return createJsonResponse({ status: 'success', message: 'deleted' });
+        }
+      }
+      return createJsonResponse({ status: 'error', message: 'shop not found' });
+    }
+
     // ── 1. 訪問済み・メモの更新 ──
     if (data.action === 'update') {
       const allData = sheet.getDataRange().getValues();
