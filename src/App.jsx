@@ -5,10 +5,32 @@ import {
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbxjXsyubrqHgW_yQ3TMpu33mIsQMw-gH40ISIAPVSTa30g0AtPlFf137MhyP_tdhm9b/exec";
 
+// 画像をCanvas経由で圧縮してBase64に変換（GAS 1MB制限対策）
 const fileToBase64 = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.readAsDataURL(file);
-  reader.onload = () => resolve(reader.result.split(',')[1]);
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      // 最大1024pxにリサイズ
+      const MAX = 1024;
+      let w = img.width;
+      let h = img.height;
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+        else { w = Math.round(w * MAX / h); h = MAX; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      // JPEG品質0.8で圧縮
+      const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+      resolve(base64);
+    };
+    img.onerror = reject;
+    img.src = reader.result;
+  };
   reader.onerror = reject;
 });
 
@@ -149,7 +171,7 @@ export default function App() {
     setRateLimitError(false);
     try {
       const base64Data = await fileToBase64(file);
-      const mimeType = file.type || "image/jpeg";
+      const mimeType = "image/jpeg"; // Canvas圧縮後はJPEG固定
       const today = new Date();
       const dateStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
 
