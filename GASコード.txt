@@ -97,63 +97,69 @@ function doPost(e) {
 
       Logger.log('OCR結果: ' + JSON.stringify(ocrInfo));
 
-      // ── Step 2: compound-beta Web検索 → 全カラム補完 ──
+      // ── Step 2: DeepSeek → 全カラム補完（画像なし・テキストのみ） ──
+      const deepseekApiKey = PropertiesService.getScriptProperties().getProperty('DEEPSEEK_API_KEY');
       const searchQuery = ocrInfo.name + (ocrInfo.location ? ' ' + ocrInfo.location : '');
-      const searchRes = UrlFetchApp.fetch(groqUrl, {
-        method: 'post',
-        contentType: 'application/json',
-        headers: { 'Authorization': 'Bearer ' + apiKey },
-        payload: JSON.stringify({
-          model: 'compound-beta',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a Japanese restaurant data extractor. Search the web and return ONLY raw JSON. No markdown, no explanation, no code block.'
-            },
-            {
-              role: 'user',
-              content: `食べログ・ぐるなび・ホットペッパーなどで「${searchQuery}」を検索して、以下のJSONを埋めてください。
-
-【重要ルール】
-- prefectureは都道府県だけ（例: "東京都" "神奈川県" "大阪府"）。市区町村を含めない。
-- areaは市区町村だけ（例: "渋谷区" "横浜市中区" "新宿区"）。都道府県を含めない。
-- genreは必ず日本語で（例: "ラーメン" "焼肉" "中華料理" "イタリアン" "居酒屋"）
-- reservableは〇か△か×のどれか1文字のみ
-- JSONのみ返す。説明文・コードブロック不要。
-
-{"prefecture":"神奈川県","area":"横浜市中区","name":"店名","genre":"ジャンル","address":"番地まで","phone":"045-xxx-xxxx","budget":"¥2,000〜¥3,000","hours":"11:00〜22:00、月曜定休","situations":["デート","友人"],"reservable":"〇","webUrl":"https://...","imageUrl":""}`
-            }
-          ],
-          temperature: 0.1,
-          max_tokens: 1024
-        }),
-        muteHttpExceptions: true
-      });
-
-      if (searchRes.getResponseCode() === 429) {
-        return createJsonResponse({ status: 'error', isRateLimit: true, message: 'APIレート制限に達しました。1分ほど待ってから再度お試しください。' });
-      }
 
       let shopInfo;
-      if (searchRes.getResponseCode() !== 200) {
+      if (!deepseekApiKey) {
         shopInfo = { name: ocrInfo.name, prefecture: '', area: ocrInfo.location || '', genre: '', address: '', phone: '', budget: '', hours: '', situations: [], reservable: '', webUrl: '', imageUrl: '' };
       } else {
-        const searchJson = JSON.parse(searchRes.getContentText());
-        let rawText = searchJson.choices[0].message.content.trim()
-          .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
-        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) rawText = jsonMatch[0];
-        try {
-          shopInfo = JSON.parse(rawText);
-        } catch(e) {
+        const dsRes = UrlFetchApp.fetch('https://api.deepseek.com/v1/chat/completions', {
+          method: 'post',
+          contentType: 'application/json',
+          headers: { 'Authorization': 'Bearer ' + deepseekApiKey },
+          payload: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [
+              {
+                role: 'system',
+                content: 'あなたは日本の飲食店情報の専門家です。指定されたJSON形式のみで回答してください。コードブロック・説明文は絶対に含めないでください。'
+              },
+              {
+                role: 'user',
+                content: `日本の飲食店「${searchQuery}」について、知っている情報を以下のJSON形式で返してください。
+
+出力ルール（必ず守ること）：
+1. prefectureは都道府県名のみ（「東京都」「神奈川県」など）。市区町村を絶対に含めない
+2. areaは市区町村のみ（「渋谷区」「横浜市中区」など）。都道府県を絶対に含めない
+3. genreは料理ジャンルを日本語で（「ラーメン」「焼肉」「中華料理」「イタリアン」など）
+4. reservableは「〇」「△」「×」のいずれか1文字のみ
+5. JSONのみ出力。説明文・コードブロック・改行コメント不要
+
+{"prefecture":"東京都","area":"渋谷区","name":"${ocrInfo.name}","genre":"ジャンル名","address":"住所（番地まで）","phone":"電話番号","budget":"¥X,000〜¥X,000","hours":"営業時間、定休日","situations":["デート","女子会"],"reservable":"〇","webUrl":"公式URL","imageUrl":""}`
+              }
+            ],
+            temperature: 0.0,
+            max_tokens: 1024
+          }),
+          muteHttpExceptions: true
+        });
+
+        if (dsRes.getResponseCode() === 429) {
+          return createJsonResponse({ status: 'error', isRateLimit: true, message: 'APIレート制限に達しました。しばらく待ってから再度お試しください。' });
+        }
+
+        if (dsRes.getResponseCode() !== 200) {
           shopInfo = { name: ocrInfo.name, prefecture: '', area: ocrInfo.location || '', genre: '', address: '', phone: '', budget: '', hours: '', situations: [], reservable: '', webUrl: '', imageUrl: '' };
+        } else {
+          const dsJson = JSON.parse(dsRes.getContentText());
+          let rawText = dsJson.choices[0].message.content.trim()
+            .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+          const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) rawText = jsonMatch[0];
+          try {
+            shopInfo = JSON.parse(rawText);
+          } catch(e) {
+            shopInfo = { name: ocrInfo.name, prefecture: '', area: ocrInfo.location || '', genre: '', address: '', phone: '', budget: '', hours: '', situations: [], reservable: '', webUrl: '', imageUrl: '' };
+          }
         }
       }
 
       if (!shopInfo.name) shopInfo.name = ocrInfo.name;
       shopInfo.imageUrl = '';
 
-      // ── GAS側後処理: prefecture/areaが混在していたら強制分割 ──
+      // GAS側後処理: prefecture/areaが混在していたら強制分割
       shopInfo = splitPrefectureArea(shopInfo);
 
       // ── 重複チェック: 同じuserId + 同じ店名が既にあるか ──
