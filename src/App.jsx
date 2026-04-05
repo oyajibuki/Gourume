@@ -7,31 +7,27 @@ const GAS_URL = "https://script.google.com/macros/s/AKfycbxjXsyubrqHgW_yQ3TMpu33
 
 // 画像をCanvas経由で圧縮してBase64に変換（GAS 1MB制限対策）
 const fileToBase64 = (file) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.readAsDataURL(file);
-  reader.onload = () => {
-    const img = new Image();
-    img.onload = () => {
-      // 最大1024pxにリサイズ
-      const MAX = 1024;
-      let w = img.width;
-      let h = img.height;
-      if (w > MAX || h > MAX) {
-        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
-        else { w = Math.round(w * MAX / h); h = MAX; }
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      // JPEG品質0.8で圧縮
-      const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-      resolve(base64);
-    };
-    img.onerror = reject;
-    img.src = reader.result;
+  const img = new Image();
+  const objectUrl = URL.createObjectURL(file);
+  img.onload = () => {
+    URL.revokeObjectURL(objectUrl);
+    // 最大800pxにリサイズ
+    const MAX = 800;
+    let w = img.width;
+    let h = img.height;
+    if (w > h) { h = Math.round(h * Math.min(MAX, w) / w); w = Math.min(MAX, w); }
+    else        { w = Math.round(w * Math.min(MAX, h) / h); h = Math.min(MAX, h); }
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+    // JPEG品質0.65で圧縮 → base64で約150〜250KB
+    const base64 = canvas.toDataURL('image/jpeg', 0.65).split(',')[1];
+    console.log(`圧縮後サイズ: ${Math.round(base64.length / 1024)}KB (${w}x${h}px)`);
+    resolve(base64);
   };
-  reader.onerror = reject;
+  img.onerror = reject;
+  img.src = objectUrl;
 });
 
 const getDeviceId = () => localStorage.getItem('gourmet_clip_device_id');
